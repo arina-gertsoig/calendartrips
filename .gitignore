@@ -1,0 +1,8 @@
+.env
+token.pickle
+credentials.json
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
