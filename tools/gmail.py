@@ -2,19 +2,21 @@ import base64
 import re
 from datetime import datetime, timedelta
 
+from tools.pdf import extract_pdf_text
+
 
 TRAVEL_PROCESSED_LABEL = "travel-processed"
-
-_label_id_cache: dict[str, str] = {}
 
 TRAVEL_SEARCH_QUERY = (
     "(subject:(flight OR train OR bus OR hotel OR booking OR reservation OR confirmation OR ticket OR itinerary) "
     "OR from:(booking.com OR airbnb.com OR expedia.com OR kayak.com OR skyscanner.com OR ryanair.com OR "
     "wizzair.com OR easyjet.com OR lufthansa.com OR klm.com OR airfrance.com OR britishairways.com OR "
     "emirates.com OR flydubai.com OR ukraineintl.com OR mau.com.ua OR uz.gov.ua OR ukrzaliznytsia.com OR "
-    "tickets.ua OR infobus.eu OR flixbus.com OR busbud.com)) "
+    "tickets.ua OR infobus.eu OR flixbus.com OR busbud.com OR lot.com)) "
     "-label:travel-processed"
 )
+
+_label_id_cache: dict[str, str] = {}
 
 
 def search_travel_emails(service, days_back: int = 30) -> list[dict]:
@@ -51,8 +53,14 @@ def get_email_content(service, message_id: str) -> dict:
     headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
 
     body = _extract_body(payload)
-    if len(body) > 20000:
-        body = body[:20000] + "\n...[truncated]"
+    pdf_text = _extract_pdf_attachments(payload, service, message_id)
+
+    full_text = body
+    if pdf_text:
+        full_text += "\n\n--- PDF Attachments ---\n" + pdf_text
+
+    if len(full_text) > 30000:
+        full_text = full_text[:30000] + "\n...[truncated]"
 
     return {
         "id": message_id,
@@ -60,7 +68,7 @@ def get_email_content(service, message_id: str) -> dict:
         "from": headers.get("From", ""),
         "to": headers.get("To", ""),
         "date": headers.get("Date", ""),
-        "body": body,
+        "body": full_text,
     }
 
 
@@ -78,14 +86,12 @@ def _extract_body(payload: dict) -> str:
 
     if mime.startswith("multipart/"):
         parts = payload.get("parts", [])
-        # Prefer plain text; fall back to html
         plain = next((p for p in parts if p.get("mimeType") == "text/plain"), None)
         if plain:
             return _extract_body(plain)
         html = next((p for p in parts if p.get("mimeType") == "text/html"), None)
         if html:
             return _extract_body(html)
-        # Recurse into nested multipart
         for part in parts:
             text = _extract_body(part)
             if text:
@@ -97,18 +103,64 @@ def _extract_body(payload: dict) -> str:
 def _html_to_text(html: str) -> str:
     text = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Tables: each row on new line, cells separated by |
+    text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<t[dh][^>]*>", " | ", text, flags=re.IGNORECASE)
+    # Block elements
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<p[^>]*>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:p|div|h[1-6]|section|article)[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "\n- ", text, flags=re.IGNORECASE)
+    # Strip remaining tags
     text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"&quot;", '"', text)
-    text = re.sub(r"&#39;", "'", text)
+    # HTML entities
+    entities = {
+        "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
+        "&quot;": '"', "&#39;": "'", "&apos;": "'", "&#160;": " ",
+        "&hellip;": "...", "&mdash;": "—", "&ndash;": "–",
+        "&laquo;": "«", "&raquo;": "»",
+    }
+    for entity, replacement in entities.items():
+        text = text.replace(entity, replacement)
+    text = re.sub(r"&#\d+;", "", text)
+    text = re.sub(r"&[a-z]+;", "", text)
+    # Whitespace cleanup
+    text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _extract_pdf_attachments(payload: dict, service, message_id: str) -> str:
+    pdf_texts = []
+    _collect_pdf_parts(payload, service, message_id, pdf_texts)
+    return "\n\n".join(pdf_texts)
+
+
+def _collect_pdf_parts(payload: dict, service, message_id: str, results: list) -> None:
+    mime = payload.get("mimeType", "")
+    filename = payload.get("filename", "")
+
+    is_pdf = mime == "application/pdf" or filename.lower().endswith(".pdf")
+    if is_pdf:
+        attachment_id = payload.get("body", {}).get("attachmentId")
+        if attachment_id:
+            try:
+                attachment = (
+                    service.users()
+                    .messages()
+                    .attachments()
+                    .get(userId="me", messageId=message_id, id=attachment_id)
+                    .execute()
+                )
+                data = base64.urlsafe_b64decode(attachment["data"] + "==")
+                text = extract_pdf_text(data)
+                if text:
+                    label = filename or "attachment.pdf"
+                    results.append(f"[PDF: {label}]\n{text}")
+            except Exception:
+                pass
+
+    for part in payload.get("parts", []):
+        _collect_pdf_parts(part, service, message_id, results)
 
 
 def get_or_create_label(service, label_name: str) -> str:
