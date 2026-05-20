@@ -12,8 +12,14 @@ SCOPES = [
 TOKEN_FILE = "token.pickle"
 CREDENTIALS_FILE = "credentials.json"
 
+_credentials = None
+
 
 def get_google_credentials():
+    global _credentials
+    if _credentials and _credentials.valid:
+        return _credentials
+
     creds = None
     if os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE, "rb") as f:
@@ -28,6 +34,7 @@ def get_google_credentials():
         with open(TOKEN_FILE, "wb") as f:
             pickle.dump(creds, f)
 
+    _credentials = creds
     return creds
 
 

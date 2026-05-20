@@ -14,15 +14,16 @@ def create_calendar_event(
     description: str = "",
     location: str = "",
     attendee_email: str = "",
-    timezone: str = "UTC",
+    start_timezone: str = "UTC",
+    end_timezone: str = "UTC",
     calendar_id: str = "primary",
 ) -> dict:
     event = {
         "summary": summary,
         "description": description,
         "location": location,
-        "start": {"dateTime": start_datetime, "timeZone": timezone},
-        "end": {"dateTime": end_datetime, "timeZone": timezone},
+        "start": {"dateTime": start_datetime, "timeZone": start_timezone},
+        "end": {"dateTime": end_datetime, "timeZone": end_timezone},
     }
 
     if attendee_email:

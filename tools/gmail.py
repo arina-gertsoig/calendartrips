@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 
 TRAVEL_PROCESSED_LABEL = "travel-processed"
 
+_label_id_cache: dict[str, str] = {}
+
 TRAVEL_SEARCH_QUERY = (
     "(subject:(flight OR train OR bus OR hotel OR booking OR reservation OR confirmation OR ticket OR itinerary) "
     "OR from:(booking.com OR airbnb.com OR expedia.com OR kayak.com OR skyscanner.com OR ryanair.com OR "
@@ -49,8 +51,8 @@ def get_email_content(service, message_id: str) -> dict:
     headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
 
     body = _extract_body(payload)
-    if len(body) > 8000:
-        body = body[:8000] + "\n...[truncated]"
+    if len(body) > 20000:
+        body = body[:20000] + "\n...[truncated]"
 
     return {
         "id": message_id,
@@ -110,12 +112,17 @@ def _html_to_text(html: str) -> str:
 
 
 def get_or_create_label(service, label_name: str) -> str:
+    if label_name in _label_id_cache:
+        return _label_id_cache[label_name]
+
     existing = service.users().labels().list(userId="me").execute()
     for label in existing.get("labels", []):
         if label["name"] == label_name:
+            _label_id_cache[label_name] = label["id"]
             return label["id"]
 
     new_label = service.users().labels().create(userId="me", body={"name": label_name}).execute()
+    _label_id_cache[label_name] = new_label["id"]
     return new_label["id"]
 
 

@@ -28,7 +28,8 @@ Your workflow:
    - `description`: booking reference, seat, class, confirmation number, etc.
    - `location`: departure airport/station or hotel address
    - `attendee_email`: the email address of the passenger whose name is on the ticket (extract from the email body — look for the passenger name and match it to an email address in the email, or use the recipient's email if it matches the ticket name)
-   - `timezone`: IANA timezone name, e.g. "Europe/Kyiv", "Europe/Warsaw"
+   - `start_timezone`: IANA timezone of the departure location, e.g. "Europe/Kyiv"
+   - `end_timezone`: IANA timezone of the arrival location, e.g. "Europe/Warsaw" (same as start_timezone for hotels)
 6. After creating all events for an email, mark it as processed with `mark_email_processed`.
 
 Important rules:
@@ -108,9 +109,13 @@ TOOLS = [
                     "type": "string",
                     "description": "Email of the passenger named on the ticket. They will receive a calendar invite.",
                 },
-                "timezone": {
+                "start_timezone": {
                     "type": "string",
-                    "description": "IANA timezone of the departure location, e.g. 'Europe/Kyiv', 'Europe/Warsaw'.",
+                    "description": "IANA timezone of the departure location, e.g. 'Europe/Kyiv'.",
+                },
+                "end_timezone": {
+                    "type": "string",
+                    "description": "IANA timezone of the arrival location, e.g. 'Europe/Warsaw'. Same as start_timezone for hotels.",
                 },
                 "calendar_id": {
                     "type": "string",
@@ -154,7 +159,8 @@ def execute_tool(name: str, inputs: dict, gmail_service, calendar_service):
             description=inputs.get("description", ""),
             location=inputs.get("location", ""),
             attendee_email=inputs.get("attendee_email", ""),
-            timezone=inputs.get("timezone", "UTC"),
+            start_timezone=inputs.get("start_timezone", "UTC"),
+            end_timezone=inputs.get("end_timezone", inputs.get("start_timezone", "UTC")),
             calendar_id=inputs.get("calendar_id", "primary"),
         )
     if name == "mark_email_processed":
@@ -177,10 +183,13 @@ def run_agent(days_back: int = 30):
         }
     ]
 
-    while True:
+    max_iterations = 50
+    for iteration in range(max_iterations):
+        if iteration == max_iterations - 1:
+            print("Warning: reached max iterations limit")
         response = client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=16384,
             thinking={"type": "adaptive"},
             system=[
                 {
