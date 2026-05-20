@@ -4,8 +4,9 @@ import os
 import anthropic
 from dotenv import load_dotenv
 
-from auth import get_calendar_service, get_gmail_service
+from auth import get_calendar_service, get_gmail_service, get_people_service
 from tools.calendar import create_calendar_event, list_calendars
+from tools.contacts import search_contacts
 from tools.gmail import get_email_content, mark_email_processed, search_travel_emails
 
 load_dotenv()
@@ -27,14 +28,14 @@ Your workflow:
    - `start_datetime` / `end_datetime`: in ISO 8601 format with timezone offset, e.g. "2024-06-15T10:30:00+03:00"
    - `description`: booking reference, seat, class, confirmation number, etc.
    - `location`: departure airport/station or hotel address
-   - `attendee_email`: the email address of the passenger whose name is on the ticket (extract from the email body — look for the passenger name and match it to an email address in the email, or use the recipient's email if it matches the ticket name)
+   - `attendee_email`: the email address of the passenger named on the ticket. To find it: (1) check the email body for the passenger's email, (2) if the passenger name matches the "To" recipient, use that address, (3) otherwise call `search_contacts` with the passenger's name. If no email is found, omit this field entirely — do NOT use the booking recipient's email for someone else's ticket.
    - `start_timezone`: IANA timezone of the departure location, e.g. "Europe/Kyiv"
    - `end_timezone`: IANA timezone of the arrival location, e.g. "Europe/Warsaw" (same as start_timezone for hotels)
 6. After creating all events for an email, mark it as processed with `mark_email_processed`.
 
 Important rules:
 - Create a separate calendar event for every travel segment (do not combine outbound + return into one event).
-- For the attendee_email: use the email of the person named on the ticket. If the ticket is in the name of the email recipient, use the "To" address from the email. If multiple passengers are on the ticket, create one event and add the primary passenger's email.
+- For the attendee_email: use the email of the person named on the ticket. Search steps: (1) look in the email body, (2) if the passenger name matches the "To" recipient use that address, (3) call `search_contacts` with the passenger name. If still not found, omit attendee_email — never substitute the booking recipient's email for a different person.
 - If you cannot determine the exact time, make a best guess and note uncertainty in the description.
 - Always prefer the local timezone of the departure city for `start_datetime`.
 - If an email has no travel info (false positive), skip it and do NOT mark it processed.
@@ -127,6 +128,20 @@ TOOLS = [
         },
     },
     {
+        "name": "search_contacts",
+        "description": "Search Google Contacts by name to find a person's email address. Use this when a ticket is in someone else's name and their email is not in the email body.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Full or partial name to search for, e.g. 'Tetiana Ladanova'.",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "mark_email_processed",
         "description": "Add the 'travel-processed' Gmail label to an email so it won't be picked up on the next run.",
         "input_schema": {
@@ -143,13 +158,15 @@ TOOLS = [
 ]
 
 
-def execute_tool(name: str, inputs: dict, gmail_service, calendar_service):
+def execute_tool(name: str, inputs: dict, gmail_service, calendar_service, people_service):
     if name == "search_travel_emails":
         return search_travel_emails(gmail_service, days_back=inputs.get("days_back", 30))
     if name == "get_email_content":
         return get_email_content(gmail_service, inputs["message_id"])
     if name == "list_calendars":
         return list_calendars(calendar_service)
+    if name == "search_contacts":
+        return search_contacts(people_service, inputs["name"])
     if name == "create_calendar_event":
         return create_calendar_event(
             calendar_service,
@@ -173,6 +190,7 @@ def run_agent(days_back: int = 30):
 
     gmail_service = get_gmail_service()
     calendar_service = get_calendar_service()
+    people_service = get_people_service()
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -221,7 +239,7 @@ def run_agent(days_back: int = 30):
                 print(f"  → {block.name}({json.dumps(block.input, ensure_ascii=False)})")
 
                 try:
-                    result = execute_tool(block.name, block.input, gmail_service, calendar_service)
+                    result = execute_tool(block.name, block.input, gmail_service, calendar_service, people_service)
                     tool_results.append(
                         {
                             "type": "tool_result",

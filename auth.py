@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/contacts.readonly",
 ]
 
 TOKEN_FILE = "token.pickle"
@@ -46,3 +47,8 @@ def get_gmail_service():
 def get_calendar_service():
     creds = get_google_credentials()
     return build("calendar", "v3", credentials=creds)
+
+
+def get_people_service():
+    creds = get_google_credentials()
+    return build("people", "v1", credentials=creds)
